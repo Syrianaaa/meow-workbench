@@ -943,23 +943,35 @@ const CRYPTO=[{id:'bitcoin',n:'Bitcoin',sym:'BTC'},{id:'ethereum',n:'Ethereum',s
 const STOCK_CACHE_KEY = 'meow_stock_cache';
 let stockTimer=null;
 
+// 静态种子数据（绝对兜底：无网/无缓存时也显示）
+const SEED_STOCKS = [
+  {s:'NVDA',n:'英伟达',c:'#76B900',ok:true,price:197.01,chg:-0.82},
+  {s:'MSFT',n:'微软',c:'#00A4EF',ok:true,price:456.32,chg:+0.34},
+  {s:'GOOGL',n:'谷歌',c:'#EA4335',ok:true,price:182.15,chg:+0.67},
+  {s:'META',n:'Meta',c:'#0668E1',ok:true,price:493.41,chg:+0.08},
+  {s:'AAPL',n:'苹果',c:'#555',ok:true,price:340.08,chg:+0.94},
+  {s:'TSM',n:'台积电',c:'#C8102E',ok:true,price:178.50,chg:-0.21}
+];
+const SEED_CRYPTO = [
+  {id:'bitcoin',n:'Bitcoin',sym:'BTC',ok:true,price:67842,chg:+1.23},
+  {id:'ethereum',n:'Ethereum',sym:'ETH',ok:true,price:3456,chg:+0.89},
+  {id:'solana',n:'Solana',sym:'SOL',ok:true,price:178.32,chg:-2.14},
+  {id:'fetch-ai',n:'Fetch.ai',sym:'FET',ok:true,price:1.24,chg:-3.56},
+  {id:'render-token',n:'Render',sym:'RNDR',ok:true,price:7.83,chg:+4.12},
+  {id:'bittensor',n:'Bittensor',sym:'TAO',ok:true,price:312.50,chg:+1.78}
+];
+
 // 股票数据缓存：读取 / 写入
 function loadStockCache(){ try{ return JSON.parse(localStorage.getItem(STOCK_CACHE_KEY)); }catch(e){ return null; } }
 function saveStockCache(data){ data._ts = Date.now(); localStorage.setItem(STOCK_CACHE_KEY, JSON.stringify(data)); }
 
-// 多代理 fallback：依次尝试不同代理
-const PROXIES = [
-  (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u)
-];
-
 async function fetchViaProxy(yahooUrl){
-  for(const makeUrl of PROXIES){
-    try{
-      const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(),10000);
-      const r=await fetch(makeUrl(yahooUrl),{signal:ctrl.signal}); clearTimeout(to);
-      if(r.ok){ const d=await r.json(); if(d.chart && d.chart.result) return d; }
-    }catch(e){ /* 继续下一个 */ }
-  }
+  try{
+    const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(),10000);
+    const url='https://api.allorigins.win/raw?url='+encodeURIComponent(yahooUrl);
+    const r=await fetch(url,{signal:ctrl.signal}); clearTimeout(to);
+    if(r.ok){ const d=await r.json(); if(d.chart && d.chart.result) return d; }
+  }catch(e){}
   return null;
 }
 
@@ -967,41 +979,29 @@ async function fetchStocks(){
   document.getElementById('stockUpdate').textContent=nowStr();
   const stockBox=document.getElementById('stockStocks');
   const cryptoBox=document.getElementById('stockCrypto');
-  // 先显示加载状态（如果有缓存就先显示缓存）
+
+  // ① 先立刻显示加载占位（绝不留白）
+  stockBox.innerHTML=STOCKS.map(s=>`<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">…</div><div class="stock-info"><div class="stock-name">加载中</div><div class="stock-symbol"></div></div><div><div class="stock-price">--</div></div></div>`).join('');
+  cryptoBox.innerHTML=CRYPTO.map(c=>`<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">…</div><div class="stock-info"><div class="stock-name">加载中</div></div><div><div class="stock-price">--</div></div></div>`).join('');
+
+  // ② 尝试读缓存先闪出来
   const cache = loadStockCache();
-  if(cache && cache.stocks) renderStockCards(cache.stocks, cache.crypto, false);
+  if(cache && cache.stocks && cache.stocks.length){ renderStockCards(cache.stocks, cache.crypto, true); }
 
-  // 美股 —— 改为批量一次请求（减少代理调用次数）
-  let stocksData=null;
-  try{
-    const symbols = STOCKS.map(s=>s.s).join(',');
-    const d = await fetchViaProxy(`https://query1.finance.yahoo.com/v8/finance/chart/${symbols}?range=1d&interval=1d`);
-    if(d && d.chart && d.chart.result){
-      stocksData = STOCKS.map(s=>{
-        const meta = (d.chart.result.find(r=>r.meta.symbol===s.s)||{}).meta;
-        if(!meta) return {ok:false,...s,price:null};
-        const price=meta.regularMarketPrice; const chg=((price-meta.chartPreviousClose)/meta.chartPreviousClose*100);
+  // ③ 拉美股实时数据（逐个请求，更稳定）
+  let stocksData = await Promise.all(STOCKS.map(async s=>{
+    try{
+      const d = await fetchViaProxy(`https://query1.finance.yahoo.com/v8/finance/chart/${s.s}?range=1d&interval=1d`);
+      if(d && d.chart && d.chart.result){
+        const m=d.chart.result[0].meta;
+        const price=m.regularMarketPrice; const chg=((price-m.chartPreviousClose)/m.chartPreviousClose*100);
         return {ok:true,...s,price,chg};
-      });
-    }
-  }catch(e){}
+      }
+    }catch(e){}
+    return {ok:false,...s,price:null};
+  }));
 
-  // 如果批量失败，逐个重试（fallback）
-  if(!stocksData || !stocksData.some(x=>x.ok)){
-    stocksData = await Promise.all(STOCKS.map(async s=>{
-      try{
-        const d = await fetchViaProxy(`https://query1.finance.yahoo.com/v8/finance/chart/${s.s}?range=1d&interval=1d`);
-        if(d && d.chart && d.chart.result){
-          const m=d.chart.result[0].meta;
-          const price=m.regularMarketPrice; const chg=((price-m.chartPreviousClose)/m.chartPreviousClose*100);
-          return {ok:true,...s,price,chg};
-        }
-      }catch(e){}
-      return {ok:false,...s,price:null};
-    }));
-  }
-
-  // 加密货币
+  // ④ 拉加密货币
   let cryptoData=null;
   try{
     const ids=CRYPTO.map(c=>c.id).join(',');
@@ -1013,34 +1013,40 @@ async function fetchStocks(){
     });
   }catch(e){}
 
-  // 渲染最终结果
-  const finalStocks = (stocksData&&stocksData.some(x=>x.ok)) ? stocksData : (cache?cache.stocks:null);
-  const finalCrypto = (cryptoData&&cryptoData.some(x=>x.ok)) ? cryptoData : (cache?cache.crypto:null);
-  const useCache = !(stocksData&&stocksData.some(x=>x.ok));
-  renderStockCards(finalStocks, finalCrypto, useCache);
+  // ⑤ 决定最终展示什么（实时 > 缓存 > 种子）
+  const hasRealStock = stocksData && stocksData.some(x=>x.ok);
+  const hasRealCrypto = cryptoData && cryptoData.some(x=>x.ok);
+  const finalStocks = hasRealStock ? stocksData : ((cache&&cache.stocks) ? cache.stocks : SEED_STOCKS);
+  const finalCrypto = hasRealCrypto ? cryptoData : ((cache&&cache.crypto) ? cache.crypto : SEED_CRYPTO);
+  const useSeed = !hasRealStock && !(cache&&cache.stocks);
+  const useCache = !hasRealStock && !useSeed && !!(cache&&cache.stocks);
 
-  // 只要有新数据就更新缓存
-  if(stocksData||cryptoData) saveStockCache({stocks:stocksData,crypto:cryptoData});
+  renderStockCards(finalStocks, finalCrypto, useCache, useSeed);
+
+  // 有新数据才更新缓存
+  if(hasRealStock||hasRealCrypto) saveStockCache({stocks:stocksData,crypto:cryptoData});
   document.getElementById('stockUpdate').textContent=nowStr();
 }
 
-function renderStockCards(stocksData, cryptoData, fromCache){
+function renderStockCards(stocksData, cryptoData, fromCache, fromSeed){
   const stockBox=document.getElementById('stockStocks');
   const cryptoBox=document.getElementById('stockCrypto');
   if(!stockBox||!cryptoBox) return;
   if(stocksData){
     stockBox.innerHTML=stocksData.map(r=>{
-      if(!r.ok) return `<div class="stock-card"><div class="stock-logo" style="background:${r.c}1A;color:${r.c}">${r.n[0]}</div><div class="stock-info"><div class="stock-name">${r.n}</div><div class="stock-symbol">${r.s}${fromCache?' · ⚠️ 缓存':' · 获取失败'}</div></div><div><div class="stock-price">${fromCache&&r.price?'$'+r.price.toFixed(2):'—'}</div>${fromCache&&r.price!=null?`<div class="stock-change flat">— 缓存数据</div>`:''}</div></div>`;
+      const tag = fromSeed ? ' · 📌 参考数据' : (fromCache ? ' · ⚠️ 缓存' : (!r.ok ? ' · 获取失败' : ''));
+      if(!r.ok && !fromSeed) return `<div class="stock-card"><div class="stock-logo" style="background:${r.c}1A;color:${r.c}">${r.n[0]}</div><div class="stock-info"><div class="stock-name">${r.n}</div><div class="stock-symbol">${r.s}${tag}</div></div><div><div class="stock-price">—</div></div></div>`;
       const cls=r.chg>0?'up':r.chg<0?'down':'flat'; const arrow=r.chg>0?'▲':r.chg<0?'▼':'—';
-      return `<div class="stock-card"><div class="stock-logo" style="background:${r.c}1A;color:${r.c}">${r.n[0]}</div><div class="stock-info"><div class="stock-name">${r.n}</div><div class="stock-symbol">${r.s}</div></div><div><div><div class="stock-price">$${r.price.toFixed(2)}</div><div class="stock-change ${cls}">${arrow} ${Math.abs(r.chg).toFixed(2)}%</div></div></div>`;
+      return `<div class="stock-card"><div class="stock-logo" style="background:${r.c}1A;color:${r.c}">${r.n[0]}</div><div class="stock-info"><div class="stock-name">${r.n}</div><div class="stock-symbol">${r.s}${tag}</div></div><div><div><div class="stock-price">$${r.price.toFixed(2)}</div><div class="stock-change ${cls}">${arrow} ${Math.abs(r.chg).toFixed(2)}%</div></div></div>`;
     }).join('');
   }
   if(cryptoData){
     cryptoBox.innerHTML=cryptoData.map(c=>{
-      if(!c.ok) return `<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">${c.sym[0]}</div><div class="stock-info"><div class="stock-name">${c.n}</div><div class="stock-symbol">${c.sym}${fromCache?' · ⚠️ 缓存':' · 获取失败'}</div></div><div><div class="stock-price">${fromCache&&c.price!=null?(c.price>=1?'$'+c.price.toLocaleString(undefined,{maximumFractionDigits:2}):'$'+c.price.toFixed(4)):'—'}</div>${fromCache&&c.price!=null?`<div class="stock-change flat">— 缓存数据</div>`:''}</div></div>`;
+      const tag = fromSeed ? ' · 📌 参考数据' : (fromCache ? ' · ⚠️ 缓存' : (!c.ok ? ' · 获取失败' : ''));
+      if(!c.ok && !fromSeed) return `<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">${c.sym[0]}</div><div class="stock-info"><div class="stock-name">${c.n}</div><div class="stock-symbol">${c.sym}${tag}</div></div><div><div class="stock-price">—</div></div></div>`;
       const price=c.price; const chg=c.chg||0; const cls=chg>0?'up':chg<0?'down':'flat'; const arrow=chg>0?'▲':chg<0?'▼':'—';
       const pr=price>=1?'$'+price.toLocaleString(undefined,{maximumFractionDigits:2}):'$'+price.toFixed(4);
-      return `<div class="stock-card"><div class="stock-logo" style="background:#F7931A1A;color:#F7931A">${c.sym[0]}</div><div class="stock-info"><div class="stock-name">${c.n}</div><div class="stock-symbol">${c.sym}</div></div><div><div><div class="stock-price">${pr}</div><div class="stock-change ${cls}">${arrow} ${Math.abs(chg).toFixed(2)}%</div></div></div>`;
+      return `<div class="stock-card"><div class="stock-logo" style="background:#F7931A1A;color:#F7931A">${c.sym[0]}</div><div class="stock-info"><div class="stock-name">${c.n}</div><div class="stock-symbol">${c.sym}${tag}</div></div><div><div><div class="stock-price">${pr}</div><div class="stock-change ${cls}">${arrow} ${Math.abs(chg).toFixed(2)}%</div></div></div>`;
     }).join('');
   }
 }
