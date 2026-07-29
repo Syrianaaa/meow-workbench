@@ -550,14 +550,13 @@
     <div class="page-header"><div class="page-title-area"><h1>设置 ☁️</h1><p>云端同步与数据备份</p></div><div class="header-avatar"><img src="cat-white.png" alt=""></div></div>
 
     <div class="card-block">
-        <h3>☁️ 云端同步（LeanCloud）</h3>
-        <p class="hint">开启后数据存到云端，换手机 / 清缓存都不丢。到 <a href="https://www.leancloud.cn/" target="_blank" style="color:var(--primary-orange)">LeanCloud</a> 免费注册 → 新建应用 →「设置 → 应用凭证」复制以下三项（用 App Key，不是 Master Key）。</p>
+        <h3>☁️ 云端同步（GitHub）</h3>
+        <p class="hint">用你已有的 GitHub 账号做云端，换手机 / 清缓存都不丢，<b>无需注册新服务</b>。到 GitHub → Settings → Developer settings → Personal access tokens → 生成一个<b>只勾 gist 权限</b>的 Token，粘贴到下面，点「创建并连接」即自动建好私有存档。</p>
         <div class="add-box">
-            <input id="lcAppId" placeholder="App ID">
-            <input id="lcAppKey" placeholder="App Key">
-            <input id="lcServer" placeholder="REST API 域名，如 https://xxxx.lc-cn-n1-shared.com">
+            <input id="ghToken" type="password" placeholder="GitHub Token（仅需 gist 权限）" autocomplete="off">
+            <input id="ghGistId" placeholder="Gist ID（首次留空=自动新建；老用户填之前的）" autocomplete="off">
             <div class="add-row">
-                <button class="btn-primary" onclick="saveCloudCfg()">保存并连接</button>
+                <button class="btn-primary" onclick="connectGist()">创建并连接</button>
                 <button class="btn-ghost" onclick="testCloud()">测试连接</button>
             </div>
         </div>
@@ -648,45 +647,39 @@ function seed(){
     dailies: []
   };
 }
-// ============ 后台配置（可在 App 内「设置」页填写；留空则只用浏览器本地存储） ============
-const BACKEND_CFG_KEY = 'meow_backend_cfg';
-function loadBackendCfg(){
-  try{ const c = JSON.parse(localStorage.getItem(BACKEND_CFG_KEY)); if(c && c.appId) return c; }catch(e){}
-  return { appId:'', appKey:'', serverURL:'' };
+// ============ 后台配置（GitHub 私有 Gist 做云端；可在 App 内「设置」页填写，留空则只用浏览器本地存储） ============
+const GIST_CFG_KEY = 'meow_gist_cfg';
+const GIST_FILENAME = 'meow-workbench-state.json';
+function loadGistCfg(){
+  try{ const c = JSON.parse(localStorage.getItem(GIST_CFG_KEY)); if(c && c.token) return c; }catch(e){}
+  return { gistId:'', token:'' };
 }
-let LC = loadBackendCfg();
-function lcReady(){ return !!(LC && LC.appId && LC.appKey && LC.serverURL); }
-function lcHeaders(){ return { 'X-LC-Id': LC.appId, 'X-LC-Key': LC.appKey, 'Content-Type':'application/json' }; }
-function saveBackendCfg(c){ LC = c; localStorage.setItem(BACKEND_CFG_KEY, JSON.stringify(c)); }
+let GIST = loadGistCfg();
+function gistReady(){ return !!(GIST && GIST.token && GIST.gistId); }
+function gistHeaders(){ return { 'Authorization':'Bearer '+GIST.token, 'Content-Type':'application/json', 'Accept':'application/vnd.github+json' }; }
+function saveGistCfg(c){ GIST = c; localStorage.setItem(GIST_CFG_KEY, JSON.stringify(c)); }
 
-// 从后台读取
+// 从 GitHub 私有 Gist 读取
 async function backendLoad(){
-  if(!lcReady()) return null;
+  if(!gistReady()) return null;
   try{
-    const oid = localStorage.getItem('lc_oid');
-    let url = `${LC.serverURL}/1.1/classes/WorkbenchState`;
-    if(oid) url += `/${oid}`; else url += `?where=${encodeURIComponent(JSON.stringify({name:'singleton'}))}`;
-    const r = await fetch(url, { headers: lcHeaders() });
+    const r = await fetch('https://api.github.com/gists/'+GIST.gistId, { headers: gistHeaders() });
+    if(r.status===404) return null;
     const d = await r.json();
-    if(oid) return d.data ? JSON.parse(d.data) : null;
-    if(d.results && d.results[0]){ localStorage.setItem('lc_oid', d.results[0].objectId); return JSON.parse(d.results[0].data); }
-  }catch(e){ console.warn('后台读取失败，改用本地数据', e); }
+    if(d.files && d.files[GIST_FILENAME] && d.files[GIST_FILENAME].content){
+      return JSON.parse(d.files[GIST_FILENAME].content);
+    }
+  }catch(e){ console.warn('云端读取失败，改用本地数据', e); }
   return null;
 }
-// 写入后台（异步、不阻塞界面）
+// 写入 GitHub 私有 Gist（异步、不阻塞界面）
 async function backendSave(s){
-  if(!lcReady()) return;
+  if(!gistReady()) return;
   try{
-    const oid = localStorage.getItem('lc_oid');
-    const body = JSON.stringify({ name:'singleton', data: JSON.stringify(s) });
-    if(oid){
-      await fetch(`${LC.serverURL}/1.1/classes/WorkbenchState/${oid}`, { method:'PUT', headers: lcHeaders(), body });
-    } else {
-      const r = await fetch(`${LC.serverURL}/1.1/classes/WorkbenchState`, { method:'POST', headers: lcHeaders(), body });
-      const d = await r.json();
-      if(d.objectId) localStorage.setItem('lc_oid', d.objectId);
-    }
-  }catch(e){ console.warn('后台写入失败', e); }
+    const body = JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify(s) } } });
+    const r = await fetch('https://api.github.com/gists/'+GIST.gistId, { method:'PATCH', headers: gistHeaders(), body });
+    if(!r.ok) console.warn('云端写入失败', r.status);
+  }catch(e){ console.warn('云端写入失败', e); }
 }
 
 let state;
@@ -1099,37 +1092,48 @@ function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>
 
 /* ================= 设置 / 云端 / 备份 ================= */
 function renderSettings(){
-  const c = loadBackendCfg();
-  const id=document.getElementById('lcAppId'), key=document.getElementById('lcAppKey'), srv=document.getElementById('lcServer');
-  if(id) id.value=c.appId||''; if(key) key.value=c.appKey||''; if(srv) srv.value=c.serverURL||'';
+  const c = loadGistCfg();
+  const tk=document.getElementById('ghToken'), gid=document.getElementById('ghGistId');
+  if(tk) tk.value=c.token||''; if(gid) gid.value=c.gistId||'';
   updateModeText();
 }
 function updateModeText(){
-  const ready = lcReady();
-  const t = ready ? '☁️ 已连后台（云端同步）' : '💾 仅本地（换设备会丢）';
+  const ready = gistReady();
+  const t = ready ? '☁️ 已连 GitHub 云端（自动同步）' : '💾 仅本地（换设备会丢）';
   const el = document.getElementById('cloudModeText'); if(el) el.textContent = t;
   const mn = document.getElementById('modeNow'); if(mn) mn.textContent = t;
 }
 async function testCloud(){
   const statusEl = document.getElementById('cloudStatus');
-  if(!lcReady()){ toast('请先填写三项密钥'); if(statusEl) statusEl.innerHTML='请先填写三项密钥'; return; }
+  if(!gistReady()){ toast('请先连接云端'); if(statusEl) statusEl.innerHTML='请先填写 Token 并连接'; return; }
   try{
-    const r = await fetch(`${LC.serverURL}/1.1/classes/WorkbenchState?limit=1`, { headers: lcHeaders() });
+    const r = await fetch('https://api.github.com/gists/'+GIST.gistId, { headers: gistHeaders() });
     const d = await r.json();
-    if(d.error){ toast('连接失败'); if(statusEl) statusEl.innerHTML='<span style="color:#E53935">连接失败：'+esc(d.error)+'</span>'; }
-    else { toast('✅ 连接成功'); if(statusEl) statusEl.innerHTML='<span style="color:#43A047">✅ 连接成功，已可云端同步</span>'; }
+    if(r.ok && d.id){ toast('✅ 连接成功'); if(statusEl) statusEl.innerHTML='<span style="color:#43A047">✅ 已连 GitHub 云端，数据自动同步</span>'; }
+    else { toast('连接失败'); if(statusEl) statusEl.innerHTML='<span style="color:#E53935">连接失败：'+esc(d.message||r.status)+'</span>'; }
   }catch(e){ toast('连接异常'); if(statusEl) statusEl.innerHTML='<span style="color:#E53935">连接异常：'+esc(e.message)+'</span>'; }
 }
-function saveCloudCfg(){
-  const appId = document.getElementById('lcAppId').value.trim();
-  const appKey = document.getElementById('lcAppKey').value.trim();
-  const serverURL = document.getElementById('lcServer').value.trim().replace(/\/+$/,'');
-  if(!appId || !appKey || !serverURL){ toast('三项都要填'); return; }
-  saveBackendCfg({ appId, appKey, serverURL });
+async function connectGist(){
+  const token = document.getElementById('ghToken').value.trim();
+  if(!token){ toast('请先填写 GitHub Token'); return; }
+  const gid = document.getElementById('ghGistId').value.trim();
+  GIST.token = token;
+  if(gid) GIST.gistId = gid;
+  if(!GIST.gistId){
+    try{
+      const body = JSON.stringify({ description:'Meow Workbench 云端存档', public:false, files:{ [GIST_FILENAME]:{ content: JSON.stringify(state) } } });
+      const r = await fetch('https://api.github.com/gists', { method:'POST', headers: gistHeaders(), body });
+      const d = await r.json();
+      if(d.id){ GIST.gistId = d.id; saveGistCfg(GIST); toast('☁️ 云端存档已创建'); }
+      else { toast('创建失败：'+(d.message||'未知错误')); return; }
+    }catch(e){ toast('创建失败，请检查网络'); return; }
+  } else {
+    saveGistCfg(GIST);
+  }
   updateModeText();
-  save();                       // 立刻把当前数据推到云端
+  save();                        // 立刻把当前数据推到云端
   toast('已保存，正在连接云端…');
-  setTimeout(testCloud, 700);
+  setTimeout(testCloud, 800);
 }
 function exportData(){
   const blob = new Blob([JSON.stringify(state,null,2)], {type:'application/json'});
@@ -1167,7 +1171,7 @@ tick(); setInterval(tick,1000);
 initState().then(()=>{
   updateHome();
   // 显示当前存储模式
-  const mode = lcReady() ? '☁️ 已连后台' : '💾 仅本地';
+  const mode = gistReady() ? '☁️ 已连云端' : '💾 仅本地';
   const badge = document.createElement('div');
   badge.id='storageMode';
   badge.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:50px;background:rgba(51,51,51,.82);color:#fff;font-size:11px;padding:4px 12px;border-radius:12px;z-index:9998;';
