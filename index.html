@@ -940,44 +940,109 @@ function updateVideoStats(){
 /* ================= 股市实时数据 ================= */
 const STOCKS=[{s:'NVDA',n:'英伟达',c:'#76B900'},{s:'MSFT',n:'微软',c:'#00A4EF'},{s:'GOOGL',n:'谷歌',c:'#EA4335'},{s:'META',n:'Meta',c:'#0668E1'},{s:'AAPL',n:'苹果',c:'#555'},{s:'TSM',n:'台积电',c:'#C8102E'}];
 const CRYPTO=[{id:'bitcoin',n:'Bitcoin',sym:'BTC'},{id:'ethereum',n:'Ethereum',sym:'ETH'},{id:'solana',n:'Solana',sym:'SOL'},{id:'fetch-ai',n:'Fetch.ai',sym:'FET'},{id:'render-token',n:'Render',sym:'RNDR'},{id:'bittensor',n:'Bittensor',sym:'TAO'}];
+const STOCK_CACHE_KEY = 'meow_stock_cache';
 let stockTimer=null;
+
+// 股票数据缓存：读取 / 写入
+function loadStockCache(){ try{ return JSON.parse(localStorage.getItem(STOCK_CACHE_KEY)); }catch(e){ return null; } }
+function saveStockCache(data){ data._ts = Date.now(); localStorage.setItem(STOCK_CACHE_KEY, JSON.stringify(data)); }
+
+// 多代理 fallback：依次尝试不同代理
+const PROXIES = [
+  (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u)
+];
+
+async function fetchViaProxy(yahooUrl){
+  for(const makeUrl of PROXIES){
+    try{
+      const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(),10000);
+      const r=await fetch(makeUrl(yahooUrl),{signal:ctrl.signal}); clearTimeout(to);
+      if(r.ok){ const d=await r.json(); if(d.chart && d.chart.result) return d; }
+    }catch(e){ /* 继续下一个 */ }
+  }
+  return null;
+}
+
 async function fetchStocks(){
   document.getElementById('stockUpdate').textContent=nowStr();
   const stockBox=document.getElementById('stockStocks');
   const cryptoBox=document.getElementById('stockCrypto');
-  stockBox.innerHTML=STOCKS.map(()=>`<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">…</div><div class="stock-info"><div class="stock-name">加载中</div><div class="stock-symbol"></div></div><div><div class="stock-price">--</div></div></div>`).join('');
-  cryptoBox.innerHTML=CRYPTO.map(()=>`<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">…</div><div class="stock-info"><div class="stock-name">加载中</div></div><div><div class="stock-price">--</div></div></div>`).join('');
-  // 美股
-  const results=await Promise.all(STOCKS.map(async s=>{
-    try{
-      const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(),8000);
-      const url='https://api.allorigins.win/raw?url='+encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/'+s.s);
-      const r=await fetch(url,{signal:ctrl.signal}); clearTimeout(to);
-      const d=await r.json(); const m=d.chart.result[0].meta;
-      const price=m.regularMarketPrice; const chg=((price-m.chartPreviousClose)/m.chartPreviousClose*100);
-      return {ok:true,...s,price,chg};
-    }catch(e){ return {ok:false,...s,price:null}; }
-  }));
-  stockBox.innerHTML=results.map(r=>{
-    if(!r.ok) return `<div class="stock-card"><div class="stock-logo" style="background:${r.c}1A;color:${r.c}">${r.n[0]}</div><div class="stock-info"><div class="stock-name">${r.n}</div><div class="stock-symbol">${r.s} · 获取失败</div></div><div><div class="stock-price">—</div></div></div>`;
-    const cls=r.chg>0?'up':r.chg<0?'down':'flat'; const arrow=r.chg>0?'▲':r.chg<0?'▼':'—';
-    return `<div class="stock-card"><div class="stock-logo" style="background:${r.c}1A;color:${r.c}">${r.n[0]}</div><div class="stock-info"><div class="stock-name">${r.n}</div><div class="stock-symbol">${r.s}</div></div><div><div><div class="stock-price">$${r.price.toFixed(2)}</div><div class="stock-change ${cls}">${arrow} ${Math.abs(r.chg).toFixed(2)}%</div></div></div>`;
-  }).join('');
-  // 加密
+  // 先显示加载状态（如果有缓存就先显示缓存）
+  const cache = loadStockCache();
+  if(cache && cache.stocks) renderStockCards(cache.stocks, cache.crypto, false);
+
+  // 美股 —— 改为批量一次请求（减少代理调用次数）
+  let stocksData=null;
+  try{
+    const symbols = STOCKS.map(s=>s.s).join(',');
+    const d = await fetchViaProxy(`https://query1.finance.yahoo.com/v8/finance/chart/${symbols}?range=1d&interval=1d`);
+    if(d && d.chart && d.chart.result){
+      stocksData = STOCKS.map(s=>{
+        const meta = (d.chart.result.find(r=>r.meta.symbol===s.s)||{}).meta;
+        if(!meta) return {ok:false,...s,price:null};
+        const price=meta.regularMarketPrice; const chg=((price-meta.chartPreviousClose)/meta.chartPreviousClose*100);
+        return {ok:true,...s,price,chg};
+      });
+    }
+  }catch(e){}
+
+  // 如果批量失败，逐个重试（fallback）
+  if(!stocksData || !stocksData.some(x=>x.ok)){
+    stocksData = await Promise.all(STOCKS.map(async s=>{
+      try{
+        const d = await fetchViaProxy(`https://query1.finance.yahoo.com/v8/finance/chart/${s.s}?range=1d&interval=1d`);
+        if(d && d.chart && d.chart.result){
+          const m=d.chart.result[0].meta;
+          const price=m.regularMarketPrice; const chg=((price-m.chartPreviousClose)/m.chartPreviousClose*100);
+          return {ok:true,...s,price,chg};
+        }
+      }catch(e){}
+      return {ok:false,...s,price:null};
+    }));
+  }
+
+  // 加密货币
+  let cryptoData=null;
   try{
     const ids=CRYPTO.map(c=>c.id).join(',');
     const r=await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`);
     const d=await r.json();
-    cryptoBox.innerHTML=CRYPTO.map(c=>{
-      const x=d[c.id]; if(!x) return `<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">${c.sym[0]}</div><div class="stock-info"><div class="stock-name">${c.n}</div><div class="stock-symbol">${c.sym}</div></div><div><div class="stock-price">—</div></div></div>`;
-      const price=x.usd; const chg=x.usd_24h_change||0; const cls=chg>0?'up':chg<0?'down':'flat'; const arrow=chg>0?'▲':chg<0?'▼':'—';
+    cryptoData = CRYPTO.map(c=>{
+      const x=d[c.id]; if(!x) return {ok:false,...c,price:null,chg:0};
+      return {ok:true,...c,price:x.usd,chg:x.usd_24h_change||0};
+    });
+  }catch(e){}
+
+  // 渲染最终结果
+  const finalStocks = (stocksData&&stocksData.some(x=>x.ok)) ? stocksData : (cache?cache.stocks:null);
+  const finalCrypto = (cryptoData&&cryptoData.some(x=>x.ok)) ? cryptoData : (cache?cache.crypto:null);
+  const useCache = !(stocksData&&stocksData.some(x=>x.ok));
+  renderStockCards(finalStocks, finalCrypto, useCache);
+
+  // 只要有新数据就更新缓存
+  if(stocksData||cryptoData) saveStockCache({stocks:stocksData,crypto:cryptoData});
+  document.getElementById('stockUpdate').textContent=nowStr();
+}
+
+function renderStockCards(stocksData, cryptoData, fromCache){
+  const stockBox=document.getElementById('stockStocks');
+  const cryptoBox=document.getElementById('stockCrypto');
+  if(!stockBox||!cryptoBox) return;
+  if(stocksData){
+    stockBox.innerHTML=stocksData.map(r=>{
+      if(!r.ok) return `<div class="stock-card"><div class="stock-logo" style="background:${r.c}1A;color:${r.c}">${r.n[0]}</div><div class="stock-info"><div class="stock-name">${r.n}</div><div class="stock-symbol">${r.s}${fromCache?' · ⚠️ 缓存':' · 获取失败'}</div></div><div><div class="stock-price">${fromCache&&r.price?'$'+r.price.toFixed(2):'—'}</div>${fromCache&&r.price!=null?`<div class="stock-change flat">— 缓存数据</div>`:''}</div></div>`;
+      const cls=r.chg>0?'up':r.chg<0?'down':'flat'; const arrow=r.chg>0?'▲':r.chg<0?'▼':'—';
+      return `<div class="stock-card"><div class="stock-logo" style="background:${r.c}1A;color:${r.c}">${r.n[0]}</div><div class="stock-info"><div class="stock-name">${r.n}</div><div class="stock-symbol">${r.s}</div></div><div><div><div class="stock-price">$${r.price.toFixed(2)}</div><div class="stock-change ${cls}">${arrow} ${Math.abs(r.chg).toFixed(2)}%</div></div></div>`;
+    }).join('');
+  }
+  if(cryptoData){
+    cryptoBox.innerHTML=cryptoData.map(c=>{
+      if(!c.ok) return `<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">${c.sym[0]}</div><div class="stock-info"><div class="stock-name">${c.n}</div><div class="stock-symbol">${c.sym}${fromCache?' · ⚠️ 缓存':' · 获取失败'}</div></div><div><div class="stock-price">${fromCache&&c.price!=null?(c.price>=1?'$'+c.price.toLocaleString(undefined,{maximumFractionDigits:2}):'$'+c.price.toFixed(4)):'—'}</div>${fromCache&&c.price!=null?`<div class="stock-change flat">— 缓存数据</div>`:''}</div></div>`;
+      const price=c.price; const chg=c.chg||0; const cls=chg>0?'up':chg<0?'down':'flat'; const arrow=chg>0?'▲':chg<0?'▼':'—';
       const pr=price>=1?'$'+price.toLocaleString(undefined,{maximumFractionDigits:2}):'$'+price.toFixed(4);
       return `<div class="stock-card"><div class="stock-logo" style="background:#F7931A1A;color:#F7931A">${c.sym[0]}</div><div class="stock-info"><div class="stock-name">${c.n}</div><div class="stock-symbol">${c.sym}</div></div><div><div><div class="stock-price">${pr}</div><div class="stock-change ${cls}">${arrow} ${Math.abs(chg).toFixed(2)}%</div></div></div>`;
     }).join('');
-  }catch(e){
-    cryptoBox.innerHTML=CRYPTO.map(c=>`<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">${c.sym[0]}</div><div class="stock-info"><div class="stock-name">${c.n}</div><div class="stock-symbol">${c.sym} · 获取失败</div></div><div><div class="stock-price">—</div></div></div>`).join('');
   }
-  document.getElementById('stockUpdate').textContent=nowStr();
 }
 
 /* ================= 番茄 ================= */
