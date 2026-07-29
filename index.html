@@ -231,7 +231,7 @@
     <a class="nav-item" data-page="account" onclick="switchPage('account')"><div class="nav-icon icon-account">👥</div><span class="nav-label">账号</span></a>
     <a class="nav-item" data-page="food" onclick="switchPage('food')"><div class="nav-icon icon-food">🍱</div><span class="nav-label">饮食</span></a>
     <a class="nav-item" data-page="tech" onclick="switchPage('tech')"><div class="nav-icon icon-tech">📰</div><span class="nav-label">科技</span></a>
-    <a class="nav-item" data-page="stock" onclick="switchPage('stock')"><div class="nav-icon icon-stock">📈</div><span class="nav-label">股市</span></a>
+    <a class="nav-item" data-page="stock" onclick="switchPage('stock')"><div class="nav-icon icon-stock">📊</div><span class="nav-label">基金</span></a>
     <a class="nav-item" data-page="tomato" onclick="switchPage('tomato')"><div class="nav-icon icon-tomato">🍅</div><span class="nav-label">番茄</span></a>
     <a class="nav-item" data-page="schedule" onclick="switchPage('schedule')"><div class="nav-icon icon-schedule">📅</div><span class="nav-label">日程</span></a>
     <a class="nav-item" data-page="daily" onclick="switchPage('daily')"><div class="nav-icon icon-daily">📊</div><span class="nav-label">日报</span></a>
@@ -387,18 +387,16 @@
     <div id="techList"></div>
 </div>
 
-<!-- 股市 -->
+<!-- 基金 -->
 <div class="page-content" id="page-stock">
-    <div class="page-header"><div class="page-title-area"><h1>股市资讯</h1><p>AI 赛道实时行情</p></div><div class="header-avatar"><img src="cat-black.png" alt=""></div></div>
+    <div class="page-header"><div class="page-title-area"><h1>📊 基金行情</h1><p>主流科技基金 · 每日更新</p></div><div class="header-avatar"><img src="cat-black.png" alt=""></div></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <div class="live-badge"><span class="live-dot"></span><span>实时数据 · <span id="stockUpdate">--:--:--</span></span></div>
-        <button class="refresh-btn" onclick="fetchStocks()">🔄 刷新</button>
+        <div class="live-badge"><span class="live-dot"></span><span>净值数据 · <span id="fundUpdate">--:--:--</span></span></div>
+        <button class="refresh-btn" onclick="fetchFunds()">🔄 刷新</button>
     </div>
-    <div class="section-divider"><div class="divider-bar"></div><span class="divider-title">AI 科技股（美股）</span></div>
-    <div id="stockStocks"></div>
-    <div class="section-divider"><div class="divider-bar"></div><span class="divider-title">AI 加密资产</span></div>
-    <div id="stockCrypto"></div>
-    <p style="font-size:11px;color:var(--text-light);margin-top:10px;line-height:1.5;">数据来源：Yahoo Finance / CoinGecko（公开接口）。行情有延迟，仅供参考，不构成投资建议。</p>
+    <div class="section-divider"><div class="divider-bar"></div><span class="divider-title">☀️ 科技主题基金</span></div>
+    <div id="fundList"></div>
+    <p style="font-size:11px;color:var(--text-light);margin-top:10px;line-height:1.5;">数据来源：天天基金（东方财富）。净值每日收盘后更新，仅供参考，不构成投资建议。</p>
 </div>
 
 <!-- 番茄 -->
@@ -707,7 +705,7 @@ function switchPage(p){
   if(p==='account') fillAccountInputs();
   if(p==='food') renderMeals();
   if(p==='tech') renderTech();
-  if(p==='stock') fetchStocks();
+  if(p==='stock') fetchFunds();
   if(p==='tomato') renderTomato();
   if(p==='schedule') renderSchedule();
   if(p==='daily') renderDaily();
@@ -938,117 +936,89 @@ function updateVideoStats(){
 }
 
 /* ================= 股市实时数据 ================= */
-const STOCKS=[{s:'NVDA',n:'英伟达',c:'#76B900'},{s:'MSFT',n:'微软',c:'#00A4EF'},{s:'GOOGL',n:'谷歌',c:'#EA4335'},{s:'META',n:'Meta',c:'#0668E1'},{s:'AAPL',n:'苹果',c:'#555'},{s:'TSM',n:'台积电',c:'#C8102E'}];
-const CRYPTO=[{id:'bitcoin',n:'Bitcoin',sym:'BTC'},{id:'ethereum',n:'Ethereum',sym:'ETH'},{id:'solana',n:'Solana',sym:'SOL'},{id:'fetch-ai',n:'Fetch.ai',sym:'FET'},{id:'render-token',n:'Render',sym:'RNDR'},{id:'bittensor',n:'Bittensor',sym:'TAO'}];
-const STOCK_CACHE_KEY = 'meow_stock_cache';
-let stockTimer=null;
-
-// 静态种子数据（绝对兜底：无网/无缓存时也显示）
-const SEED_STOCKS = [
-  {s:'NVDA',n:'英伟达',c:'#76B900',ok:true,price:197.01,chg:-0.82},
-  {s:'MSFT',n:'微软',c:'#00A4EF',ok:true,price:456.32,chg:+0.34},
-  {s:'GOOGL',n:'谷歌',c:'#EA4335',ok:true,price:182.15,chg:+0.67},
-  {s:'META',n:'Meta',c:'#0668E1',ok:true,price:493.41,chg:+0.08},
-  {s:'AAPL',n:'苹果',c:'#555',ok:true,price:340.08,chg:+0.94},
-  {s:'TSM',n:'台积电',c:'#C8102E',ok:true,price:178.50,chg:-0.21}
+/* ================= 基金 ================= */
+// 主流科技基金列表（代码 + 名称 + 颜色 + 种子净值）
+const FUNDS=[
+  {code:'516160',n:'银华中证光伏产业ETF',c:'#FF9800',seed:66.03},
+  {code:'016835',n:'永赢科技智选混合C',c:'#2196F3',seed:59.68},
+  {code:'000216',n:'华安黄金ETF联接C',c:'#FFC107',seed:87.40},
+  {code:'159994',n:'银华中证5G通信主题ETF',c:'#4CAF50',seed:64.23},
+  {code:'017531',n:'永赢高端装备智选混合C',c:'#9C27B0',seed:58.64},
+  {code:'018798',n:'永赢先锋半导体智选混合C',c:'#E91E63',seed:45.99},
+  {code:'010373',n:'华泰柏瑞质量成长混合A',c:'#00BCD4',seed:45.79},
+  {code:'006479',n:'广发纳斯达克100ETF联接C',c:'#3F51B5',seed:170.42},
+  {code:'016527',n:'易方达云计算与大数据联接C',c:'#607D8B',seed:33.65},
+  {code:'018882',n:'易方达半导体材料设备联接C',c:'#795548',seed:41.21}
 ];
-const SEED_CRYPTO = [
-  {id:'bitcoin',n:'Bitcoin',sym:'BTC',ok:true,price:67842,chg:+1.23},
-  {id:'ethereum',n:'Ethereum',sym:'ETH',ok:true,price:3456,chg:+0.89},
-  {id:'solana',n:'Solana',sym:'SOL',ok:true,price:178.32,chg:-2.14},
-  {id:'fetch-ai',n:'Fetch.ai',sym:'FET',ok:true,price:1.24,chg:-3.56},
-  {id:'render-token',n:'Render',sym:'RNDR',ok:true,price:7.83,chg:+4.12},
-  {id:'bittensor',n:'Bittensor',sym:'TAO',ok:true,price:312.50,chg:+1.78}
-];
+const FUND_CACHE_KEY = 'meow_fund_cache';
+let fundTimer=null;
 
-// 股票数据缓存：读取 / 写入
-function loadStockCache(){ try{ return JSON.parse(localStorage.getItem(STOCK_CACHE_KEY)); }catch(e){ return null; } }
-function saveStockCache(data){ data._ts = Date.now(); localStorage.setItem(STOCK_CACHE_KEY, JSON.stringify(data)); }
+function loadFundCache(){ try{ return JSON.parse(localStorage.getItem(FUND_CACHE_KEY)); }catch(e){ return null; } }
+function saveFundCache(data){ data._ts=Date.now(); localStorage.setItem(FUND_CACHE_KEY, JSON.stringify(data)); }
 
-async function fetchViaProxy(yahooUrl){
+async function fetchFundNav(code){
   try{
-    const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(),10000);
-    const url='https://api.allorigins.win/raw?url='+encodeURIComponent(yahooUrl);
+    const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(),8000);
+    const url='https://api.fund.eastmoney.com/f10/lsjz?callback=cb&fundCode='+code+'&pageIndex=1&pageSize=1&startDate=&endDate=';
     const r=await fetch(url,{signal:ctrl.signal}); clearTimeout(to);
-    if(r.ok){ const d=await r.json(); if(d.chart && d.chart.result) return d; }
+    const text=await r.text();
+    // 去掉 JSONP 回调
+    const json=text.replace(/^(?:jQuery|cb)\(/,'').replace(/\)$/,'');
+    const d=JSON.parse(json);
+    if(d.Data&&d.Data.LSJZList&&d.Data.LSJZList.length){
+      const item=d.Data.LSJZList[0];
+      return {ok:true, date:item.FSRQ, nav:+item.DWJZ, chg:+item.JZZZL};
+    }
   }catch(e){}
   return null;
 }
 
-async function fetchStocks(){
-  document.getElementById('stockUpdate').textContent=nowStr();
-  const stockBox=document.getElementById('stockStocks');
-  const cryptoBox=document.getElementById('stockCrypto');
+async function fetchFunds(){
+  document.getElementById('fundUpdate').textContent=nowStr();
+  const box=document.getElementById('fundList');
 
-  // ① 先立刻显示加载占位（绝不留白）
-  stockBox.innerHTML=STOCKS.map(s=>`<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">…</div><div class="stock-info"><div class="stock-name">加载中</div><div class="stock-symbol"></div></div><div><div class="stock-price">--</div></div></div>`).join('');
-  cryptoBox.innerHTML=CRYPTO.map(c=>`<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">…</div><div class="stock-info"><div class="stock-name">加载中</div></div><div><div class="stock-price">--</div></div></div>`).join('');
+  // ① 立刻显示加载占位
+  box.innerHTML=FUNDS.map(f=>`<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">…</div><div class="stock-info"><div class="stock-name">加载中</div><div class="stock-symbol"></div></div><div><div class="stock-price">--</div></div></div>`).join('');
 
-  // ② 尝试读缓存先闪出来
-  const cache = loadStockCache();
-  if(cache && cache.stocks && cache.stocks.length){ renderStockCards(cache.stocks, cache.crypto, true); }
+  // ② 先闪缓存
+  const cache=loadFundCache();
+  if(cache&&cache.funds&&cache.funds.length) renderFundCards(cache.funds, false, false);
 
-  // ③ 拉美股实时数据（逐个请求，更稳定）
-  let stocksData = await Promise.all(STOCKS.map(async s=>{
-    try{
-      const d = await fetchViaProxy(`https://query1.finance.yahoo.com/v8/finance/chart/${s.s}?range=1d&interval=1d`);
-      if(d && d.chart && d.chart.result){
-        const m=d.chart.result[0].meta;
-        const price=m.regularMarketPrice; const chg=((price-m.chartPreviousClose)/m.chartPreviousClose*100);
-        return {ok:true,...s,price,chg};
-      }
-    }catch(e){}
-    return {ok:false,...s,price:null};
+  // ③ 逐只拉取（天天基金接口不支持批量）
+  const results=await Promise.all(FUNDS.map(async f=>{
+    const d=await fetchFundNav(f.code);
+    if(d) return {...f,...d};
+    return {ok:false,...f,nav:f.seed,chg:0,date:''};
   }));
 
-  // ④ 拉加密货币
-  let cryptoData=null;
-  try{
-    const ids=CRYPTO.map(c=>c.id).join(',');
-    const r=await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`);
-    const d=await r.json();
-    cryptoData = CRYPTO.map(c=>{
-      const x=d[c.id]; if(!x) return {ok:false,...c,price:null,chg:0};
-      return {ok:true,...c,price:x.usd,chg:x.usd_24h_change||0};
-    });
-  }catch(e){}
+  // ④ 决定最终数据：实时 > 缓存 > 种子
+  const hasReal=results.some(x=>x.ok);
+  const final = hasReal ? results : ((cache&&cache.funds) ? cache.funds : FUNDS.map(f=>({ok:false,...f,nav:f.seed,chg:0,date:''})));
+  const fromSeed=!hasReal&&!(cache&&cache.funds);
+  const fromCache=!hasReal&&!fromSeed;
 
-  // ⑤ 决定最终展示什么（实时 > 缓存 > 种子）
-  const hasRealStock = stocksData && stocksData.some(x=>x.ok);
-  const hasRealCrypto = cryptoData && cryptoData.some(x=>x.ok);
-  const finalStocks = hasRealStock ? stocksData : ((cache&&cache.stocks) ? cache.stocks : SEED_STOCKS);
-  const finalCrypto = hasRealCrypto ? cryptoData : ((cache&&cache.crypto) ? cache.crypto : SEED_CRYPTO);
-  const useSeed = !hasRealStock && !(cache&&cache.stocks);
-  const useCache = !hasRealStock && !useSeed && !!(cache&&cache.stocks);
+  renderFundCards(final, fromCache, fromSeed);
 
-  renderStockCards(finalStocks, finalCrypto, useCache, useSeed);
-
-  // 有新数据才更新缓存
-  if(hasRealStock||hasRealCrypto) saveStockCache({stocks:stocksData,crypto:cryptoData});
-  document.getElementById('stockUpdate').textContent=nowStr();
+  if(hasReal) saveFundCache({funds:results});
+  document.getElementById('fundUpdate').textContent=nowStr();
 }
 
-function renderStockCards(stocksData, cryptoData, fromCache, fromSeed){
-  const stockBox=document.getElementById('stockStocks');
-  const cryptoBox=document.getElementById('stockCrypto');
-  if(!stockBox||!cryptoBox) return;
-  if(stocksData){
-    stockBox.innerHTML=stocksData.map(r=>{
-      const tag = fromSeed ? ' · 📌 参考数据' : (fromCache ? ' · ⚠️ 缓存' : (!r.ok ? ' · 获取失败' : ''));
-      if(!r.ok && !fromSeed) return `<div class="stock-card"><div class="stock-logo" style="background:${r.c}1A;color:${r.c}">${r.n[0]}</div><div class="stock-info"><div class="stock-name">${r.n}</div><div class="stock-symbol">${r.s}${tag}</div></div><div><div class="stock-price">—</div></div></div>`;
-      const cls=r.chg>0?'up':r.chg<0?'down':'flat'; const arrow=r.chg>0?'▲':r.chg<0?'▼':'—';
-      return `<div class="stock-card"><div class="stock-logo" style="background:${r.c}1A;color:${r.c}">${r.n[0]}</div><div class="stock-info"><div class="stock-name">${r.n}</div><div class="stock-symbol">${r.s}${tag}</div></div><div><div><div class="stock-price">$${r.price.toFixed(2)}</div><div class="stock-change ${cls}">${arrow} ${Math.abs(r.chg).toFixed(2)}%</div></div></div>`;
-    }).join('');
-  }
-  if(cryptoData){
-    cryptoBox.innerHTML=cryptoData.map(c=>{
-      const tag = fromSeed ? ' · 📌 参考数据' : (fromCache ? ' · ⚠️ 缓存' : (!c.ok ? ' · 获取失败' : ''));
-      if(!c.ok && !fromSeed) return `<div class="stock-card"><div class="stock-logo" style="background:#F0F0F0;">${c.sym[0]}</div><div class="stock-info"><div class="stock-name">${c.n}</div><div class="stock-symbol">${c.sym}${tag}</div></div><div><div class="stock-price">—</div></div></div>`;
-      const price=c.price; const chg=c.chg||0; const cls=chg>0?'up':chg<0?'down':'flat'; const arrow=chg>0?'▲':chg<0?'▼':'—';
-      const pr=price>=1?'$'+price.toLocaleString(undefined,{maximumFractionDigits:2}):'$'+price.toFixed(4);
-      return `<div class="stock-card"><div class="stock-logo" style="background:#F7931A1A;color:#F7931A">${c.sym[0]}</div><div class="stock-info"><div class="stock-name">${c.n}</div><div class="stock-symbol">${c.sym}${tag}</div></div><div><div><div class="stock-price">${pr}</div><div class="stock-change ${cls}">${arrow} ${Math.abs(chg).toFixed(2)}%</div></div></div>`;
-    }).join('');
-  }
+function renderFundCards(funds, fromCache, fromSeed){
+  const box=document.getElementById('fundList'); if(!box) return;
+  box.innerHTML=funds.map(f=>{
+    const tag=fromSeed?' 📌 参考数据':(fromCache?' ⚠️ 缓存':'');
+    const cls=f.chg>0?'up':f.chg<0?'down':'flat';
+    const arrow=f.chg>0?'▲':f.chg<0?'▼':'—';
+    const dateTag=f.date?(' · '+f.date):'';
+    return `<div class="stock-card">
+      <div class="stock-logo" style="background:${f.c}1A;color:${f.c}">${f.n[0]}</div>
+      <div class="stock-info"><div class="stock-name">${esc(f.n)}</div><div class="stock-symbol">${f.code}${tag}${dateTag}</div></div>
+      <div>
+        <div><div class="stock-price">¥${f.nav?f.nav.toFixed(2):'--'}</div>
+        <div class="stock-change ${cls}">${arrow} ${Math.abs(f.chg).toFixed(2)}%</div></div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 /* ================= 番茄 ================= */
