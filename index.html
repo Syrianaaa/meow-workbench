@@ -182,6 +182,11 @@
         .btn-primary { background: linear-gradient(135deg,#FFB5B5,#FF9F7A); color: white; border: none; border-radius: 10px; padding: 10px; font-size: 14px; font-weight: 700; cursor: pointer; width: 100%; }
         .btn-primary:active { transform: scale(0.98); }
         .btn-ghost { background: white; border: 1px solid #EEC9BC; border-radius: 10px; padding: 10px; font-size: 14px; font-weight: 600; color: var(--primary-orange); cursor: pointer; }
+        .card-block { background: white; border-radius: 18px; box-shadow: var(--card-shadow); border: 1px solid rgba(0,0,0,0.03); padding: 18px 16px; margin-bottom: 16px; }
+        .card-block h3 { font-size: 16px; font-weight: 800; margin-bottom: 8px; }
+        .hint { font-size: 12.5px; color: var(--text-gray); line-height: 1.7; margin-bottom: 12px; }
+        .cloud-status { font-size: 13px; color: var(--text-gray); margin-top: 4px; }
+        .cloud-status b { color: var(--primary-orange); }
 
         /* 实时数据徽标 */
         .live-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-gray); background: white; padding: 6px 12px; border-radius: 14px; box-shadow: var(--card-shadow); }
@@ -237,6 +242,7 @@
     <a class="nav-item" data-page="fortune" onclick="switchPage('fortune')"><div class="nav-icon icon-fortune">📿</div><span class="nav-label">每日灵签</span></a>
     <a class="nav-item" data-page="fitness" onclick="switchPage('fitness')"><div class="nav-icon icon-fitness">🧘‍♀️</div><span class="nav-label">健身运动</span></a>
     <a class="nav-item" data-page="video" onclick="switchPage('video')"><div class="nav-icon icon-video">🔥</div><span class="nav-label">爆款视频</span></a>
+    <a class="nav-item" data-page="settings" onclick="switchPage('settings')"><div class="nav-icon icon-settings">⚙️</div><span class="nav-label">设置</span></a>
 </nav>
 
 <main class="main-content">
@@ -540,6 +546,41 @@
     <div id="videoList"></div>
 </div>
 
+<div class="page-content" id="page-settings">
+    <div class="page-header"><div class="page-title-area"><h1>设置 ☁️</h1><p>云端同步与数据备份</p></div><div class="header-avatar"><img src="cat-white.png" alt=""></div></div>
+
+    <div class="card-block">
+        <h3>☁️ 云端同步（LeanCloud）</h3>
+        <p class="hint">开启后数据存到云端，换手机 / 清缓存都不丢。到 <a href="https://www.leancloud.cn/" target="_blank" style="color:var(--primary-orange)">LeanCloud</a> 免费注册 → 新建应用 →「设置 → 应用凭证」复制以下三项（用 App Key，不是 Master Key）。</p>
+        <div class="add-box">
+            <input id="lcAppId" placeholder="App ID">
+            <input id="lcAppKey" placeholder="App Key">
+            <input id="lcServer" placeholder="REST API 域名，如 https://xxxx.lc-cn-n1-shared.com">
+            <div class="add-row">
+                <button class="btn-primary" onclick="saveCloudCfg()">保存并连接</button>
+                <button class="btn-ghost" onclick="testCloud()">测试连接</button>
+            </div>
+        </div>
+        <p class="cloud-status" id="cloudStatus">当前模式：<b id="cloudModeText">检测中…</b></p>
+    </div>
+
+    <div class="card-block">
+        <h3>💾 数据备份 / 恢复</h3>
+        <p class="hint">还没开云端时，可先导出备份文件；换设备后在此导入即可还原全部数据。</p>
+        <div class="add-row">
+            <button class="btn-primary" onclick="exportData()">导出备份文件</button>
+            <label class="btn-ghost" for="importFile" style="text-align:center;display:flex;align-items:center;justify-content:center;">导入备份</label>
+            <input id="importFile" type="file" accept="application/json" style="display:none" onchange="importData(this)">
+        </div>
+    </div>
+
+    <div class="card-block">
+        <h3>📊 存储状态</h3>
+        <p class="hint">当前模式：<b id="modeNow">—</b></p>
+        <p class="hint">提示：用手机浏览器打开本页并加书签，正常模式（非无痕）下本地数据会一直保留。</p>
+    </div>
+</div>
+
 </main>
 
 <button class="fab-button" onclick="showFabMenu()">+</button>
@@ -607,18 +648,16 @@ function seed(){
     dailies: []
   };
 }
-// ============ 后台配置（LeanCloud 注册应用后填入，留空则只用浏览器本地存储） ============
-const BACKEND = {
-  type: 'leancloud',                 // 'leancloud' = 用云数据库；'local' = 仅本地
-  leancloud: {
-    appId: 'YOUR_LEANCLOUD_APP_ID',
-    appKey: 'YOUR_LEANCLOUD_APP_KEY',
-    serverURL: 'https://YOUR_APP.lc-cn-n1-shared.com'   // 应用「设置 → 应用凭证」里的 REST API 域名
-  }
-};
-const LC = BACKEND.leancloud;
-function lcReady(){ return BACKEND.type==='leancloud' && LC.appId && !LC.appId.startsWith('YOUR_'); }
+// ============ 后台配置（可在 App 内「设置」页填写；留空则只用浏览器本地存储） ============
+const BACKEND_CFG_KEY = 'meow_backend_cfg';
+function loadBackendCfg(){
+  try{ const c = JSON.parse(localStorage.getItem(BACKEND_CFG_KEY)); if(c && c.appId) return c; }catch(e){}
+  return { appId:'', appKey:'', serverURL:'' };
+}
+let LC = loadBackendCfg();
+function lcReady(){ return !!(LC && LC.appId && LC.appKey && LC.serverURL); }
 function lcHeaders(){ return { 'X-LC-Id': LC.appId, 'X-LC-Key': LC.appKey, 'Content-Type':'application/json' }; }
+function saveBackendCfg(c){ LC = c; localStorage.setItem(BACKEND_CFG_KEY, JSON.stringify(c)); }
 
 // 从后台读取
 async function backendLoad(){
@@ -686,6 +725,7 @@ function switchPage(p){
   if(p==='fortune') drawFortune();
   if(p==='fitness') renderFitness();
   if(p==='video') renderVideo();
+  if(p==='settings') renderSettings();
 }
 
 /* ================= 首页 ================= */
@@ -1056,6 +1096,67 @@ function drawFortune(){ const f=FORTUNES[Math.floor(Math.random()*FORTUNES.lengt
 
 /* ================= 工具 ================= */
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* ================= 设置 / 云端 / 备份 ================= */
+function renderSettings(){
+  const c = loadBackendCfg();
+  const id=document.getElementById('lcAppId'), key=document.getElementById('lcAppKey'), srv=document.getElementById('lcServer');
+  if(id) id.value=c.appId||''; if(key) key.value=c.appKey||''; if(srv) srv.value=c.serverURL||'';
+  updateModeText();
+}
+function updateModeText(){
+  const ready = lcReady();
+  const t = ready ? '☁️ 已连后台（云端同步）' : '💾 仅本地（换设备会丢）';
+  const el = document.getElementById('cloudModeText'); if(el) el.textContent = t;
+  const mn = document.getElementById('modeNow'); if(mn) mn.textContent = t;
+}
+async function testCloud(){
+  const statusEl = document.getElementById('cloudStatus');
+  if(!lcReady()){ toast('请先填写三项密钥'); if(statusEl) statusEl.innerHTML='请先填写三项密钥'; return; }
+  try{
+    const r = await fetch(`${LC.serverURL}/1.1/classes/WorkbenchState?limit=1`, { headers: lcHeaders() });
+    const d = await r.json();
+    if(d.error){ toast('连接失败'); if(statusEl) statusEl.innerHTML='<span style="color:#E53935">连接失败：'+esc(d.error)+'</span>'; }
+    else { toast('✅ 连接成功'); if(statusEl) statusEl.innerHTML='<span style="color:#43A047">✅ 连接成功，已可云端同步</span>'; }
+  }catch(e){ toast('连接异常'); if(statusEl) statusEl.innerHTML='<span style="color:#E53935">连接异常：'+esc(e.message)+'</span>'; }
+}
+function saveCloudCfg(){
+  const appId = document.getElementById('lcAppId').value.trim();
+  const appKey = document.getElementById('lcAppKey').value.trim();
+  const serverURL = document.getElementById('lcServer').value.trim().replace(/\/+$/,'');
+  if(!appId || !appKey || !serverURL){ toast('三项都要填'); return; }
+  saveBackendCfg({ appId, appKey, serverURL });
+  updateModeText();
+  save();                       // 立刻把当前数据推到云端
+  toast('已保存，正在连接云端…');
+  setTimeout(testCloud, 700);
+}
+function exportData(){
+  const blob = new Blob([JSON.stringify(state,null,2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `meow-backup-${today()}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('已导出备份文件');
+}
+function importData(input){
+  const f = input.files[0]; if(!f) return;
+  const reader = new FileReader();
+  reader.onload = e=>{
+    try{
+      const data = JSON.parse(e.target.result);
+      state = data; save();
+      updateHome();
+      const p = document.querySelector('.nav-item.active') && document.querySelector('.nav-item.active').dataset.page;
+      if(p==='todo') renderTodos(); if(p==='finance') renderFinance(); if(p==='project') renderProjects();
+      if(p==='material') renderMaterials(); if(p==='topic') renderTopics(); if(p==='beauty') renderBeauty();
+      toast('✅ 备份已恢复');
+    }catch(err){ toast('文件格式不对'); }
+  };
+  reader.readAsText(f);
+  input.value='';
+}
 function showFabMenu(){ const t=prompt('快速添加待办：'); if(t&&t.trim()){ state.todos.unshift({id:uid(),title:t.trim(),time:'',group:'',pri:'medium',done:false}); save(); if(document.querySelector('.nav-item.active').dataset.page==='todo') renderTodos(); updateHome(); toast('已添加待办'); } }
 
 /* ================= 实时时钟/日期 ================= */
